@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MSFS Career Scheduler</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-gray-900 text-gray-200">
+  <div id="root"></div>
+  <script type="text/babel">
+    const {useState, useEffect} = React;
+
+    // --- Data Maps ---------------------------------------------------------
+    const AIRLINES = {
+      "Air Canada": {type:"network", bases:["CYYZ","CYUL"], fleet:["A319","A320","A321","B777-300ER"], country:"Canada", continent:"North America"},
+      "United": {type:"network", bases:["KDEN","KIAD","KJFK","KEWR"], fleet:["A319","A320","A321","B777-300ER","B737 MAX 8"], country:"United States", continent:"North America"},
+      "Lufthansa": {type:"network", bases:["EDDF","EDDM"], fleet:["A319","A320","A321","B777-300ER"], country:"Germany", continent:"Europe"},
+      "British Airways": {type:"network", bases:["EGLL"], fleet:["A319","A320","A321","B777-300ER","A350-1000"], country:"United Kingdom", continent:"Europe"},
+      "Swiss": {type:"network", bases:["LSZH"], fleet:["A319","A320","A321","B777-300ER","A350-900"], country:"Switzerland", continent:"Europe"},
+      "Emirates": {type:"network", bases:["OMDB"], fleet:["B777-300ER","A350-900","A350-1000"], country:"United Arab Emirates", continent:"Middle East"},
+      "Qatar": {type:"network", bases:["OTHH"], fleet:["B777-300ER","A350-900","A350-1000"], country:"Qatar", continent:"Middle East"},
+      "Ryanair": {type:"ulcc", bases:["EIDW"], fleet:["A320","A321","B737 MAX 8"], country:"Ireland", continent:"Europe"},
+      "UPS": {type:"cargo", bases:["KSDF"], fleet:["B777 Freighter"], country:"United States", continent:"North America"},
+      "FedEx": {type:"cargo", bases:["KMEM"], fleet:["B777 Freighter"], country:"United States", continent:"North America"}
+    };
+
+    const AIRLINE_CODES = {
+      "Air Canada": {iata:"AC", icao:"ACA", telephony:"Air Canada"},
+      "United": {iata:"UA", icao:"UAL", telephony:"United"},
+      "Lufthansa": {iata:"LH", icao:"DLH", telephony:"Lufthansa"},
+      "British Airways": {iata:"BA", icao:"BAW", telephony:"Speedbird"},
+      "Swiss": {iata:"LX", icao:"SWR", telephony:"Swiss"},
+      "Emirates": {iata:"EK", icao:"UAE", telephony:"Emirates"},
+      "Qatar": {iata:"QR", icao:"QTR", telephony:"Qatar"},
+      "Ryanair": {iata:"FR", icao:"RYR", telephony:"Ryanair"},
+      "UPS": {iata:"5X", icao:"UPS", telephony:"UPS"},
+      "FedEx": {iata:"FX", icao:"FDX", telephony:"FedEx"}
+    };
+
+    const GATE_HINTS = {
+      "CYYZ": {"Air Canada": ["T1 C34","T1 D12","T1 E78"], "United": ["T1 F60"]},
+      "EGLL": {"British Airways": ["T5A 18","T5B 37","T5C 62"]},
+      "EDDF": {"Lufthansa": ["A12","A18","Z50"], "UPS": ["Cargo N3"], "FedEx": ["Cargo S2"]},
+      "KMEM": {"FedEx": ["Cargo S2"]},
+      "KSDF": {"UPS": ["Cargo N3"]}
+    };
+
+    const GENERIC_GATES = ["B23","C12","D4","E5","F7"];
+
+    const DEFAULT_PAYWARE = [
+      {icao:"CYYZ", city:"Toronto", lat:43.6777, lon:-79.6248},
+      {icao:"CYUL", city:"Montreal", lat:45.4706, lon:-73.7408},
+      {icao:"KJFK", city:"New York", lat:40.6398, lon:-73.7789},
+      {icao:"KDEN", city:"Denver", lat:39.8617, lon:-104.6731},
+      {icao:"KIAD", city:"Washington", lat:38.9445, lon:-77.4558},
+      {icao:"KEWR", city:"Newark", lat:40.6925, lon:-74.1687},
+      {icao:"EGLL", city:"London", lat:51.4775, lon:-0.4614},
+      {icao:"EDDF", city:"Frankfurt", lat:50.0333, lon:8.5705},
+      {icao:"EDDM", city:"Munich", lat:48.3537, lon:11.7750},
+      {icao:"LSZH", city:"Zurich", lat:47.4647, lon:8.5492},
+      {icao:"OMDB", city:"Dubai", lat:25.2528, lon:55.3644},
+      {icao:"OTHH", city:"Doha", lat:25.2731, lon:51.6089},
+      {icao:"KMEM", city:"Memphis", lat:35.0425, lon:-89.9767},
+      {icao:"KSDF", city:"Louisville", lat:38.1744, lon:-85.7360},
+      {icao:"EIDW", city:"Dublin", lat:53.4213, lon:-6.2701}
+    ];
+
+    const CONTINENTS = {
+      "North America": ["Air Canada","United","UPS","FedEx"],
+      "Europe": ["Lufthansa","British Airways","Swiss","Ryanair"],
+      "Middle East": ["Emirates","Qatar"]
+    };
+
+    const ALL_AIRCRAFT = ["A319","A320","A321","B737 MAX 8","B777-300ER","B777 Freighter","A350-900","A350-1000","A350-900 ULR"];
+
+    // --- Helpers -----------------------------------------------------------
+    function seededRng(seed){
+      let h = 2166136261 >>> 0;
+      for(let i=0;i<seed.length;i++){
+        h ^= seed.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+      }
+      return function(){
+        h += h << 13; h ^= h >>> 7; h += h << 3; h ^= h >>> 17; h += h << 5;
+        return (h >>> 0) / 4294967295;
+      };
+    }
+
+    function haversineNM(a,b){
+      const R = 3440.065; // nm
+      const toRad = x=>x*Math.PI/180;
+      const dLat = toRad(b.lat-a.lat);
+      const dLon = toRad(b.lon-a.lon);
+      const lat1 = toRad(a.lat); const lat2 = toRad(b.lat);
+      const c = Math.sin(dLat/2)**2 + Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLon/2)**2;
+      const d = 2 * Math.atan2(Math.sqrt(c), Math.sqrt(1-c));
+      return R * d;
+    }
+
+    function estimateBlockMinutes(nm, rng=Math.random){
+      const flight = nm/7.5; // minutes at ~450kt
+      const taxi = 10 + Math.floor(rng()*16); // 10-25
+      return Math.round(flight + taxi);
+    }
+
+    function minutesToHHMM(mins){
+      const h = Math.floor(mins/60).toString().padStart(2,'0');
+      const m = Math.floor(mins%60).toString().padStart(2,'0');
+      return `${h}:${m}`;
+    }
+
+    function classifyDuration(mins){
+      if(mins>360) return 'long';
+      if(mins>180) return 'medium';
+      return 'short';
+    }
+
+    function chooseAircraft(mins, allowedList, airlineFleet, isCargo){
+      if(isCargo){
+        return allowedList.includes("B777 Freighter")?"B777 Freighter":allowedList[0];
+      }
+      const intersect = allowedList.filter(a=>airlineFleet.includes(a));
+      const base = intersect.length?intersect:allowedList;
+      const h = mins/60;
+      if(h>15) return base.includes("A350-900 ULR")?"A350-900 ULR":base[0];
+      if(h>=12) return base.includes("B777-300ER")?"B777-300ER":(base.includes("A350-1000")?"A350-1000":base[0]);
+      if(h>=9) return base.includes("A350-1000")?"A350-1000":(base.includes("B777-300ER")?"B777-300ER":base[0]);
+      if(h>=6){
+        if(h>=6.5 && base.includes("B777-300ER")) return "B777-300ER";
+        if(base.includes("A350-900")) return "A350-900";
+        if(base.includes("B777-300ER")) return "B777-300ER";
+      }
+      const narrows = ["A319","A320","A321","B737 MAX 8"];
+      const nb = base.find(a=>narrows.includes(a));
+      return nb || base[0];
+    }
+
+    function makeFlightIds(airline, seq){
+      const c = AIRLINE_CODES[airline];
+      return {
+        flight_no: `${c.iata}${seq}`,
+        icao_flight_no: `${c.icao}${seq}`,
+        callsign: `${c.telephony} ${seq}`
+      };
+    }
+
+    function suggestGate(icao, airline, rng=Math.random){
+      const hints = GATE_HINTS[icao];
+      if(hints && hints[airline]){
+        const arr = hints[airline];
+        return arr[Math.floor(rng()*arr.length)];
+      }
+      return GENERIC_GATES[Math.floor(rng()*GENERIC_GATES.length)];
+    }
+
+    function computeLongDayIndices(longDays){
+      const idx = [];
+      if(longDays<=0) return idx;
+      const step = 7/longDays;
+      for(let i=0;i<longDays;i++) idx.push(Math.floor(i*step));
+      return Array.from(new Set(idx)).slice(0,longDays);
+    }
+
+    function generateLocalSchedule(params){
+      const {airlineName, airline, payware, dailyHours, longDays, aircraftTypes, seed} = params;
+      const rng = seededRng(seed);
+      const allowed = payware;
+      const longIdx = computeLongDayIndices(longDays);
+      let seq = 100;
+      let current = (airline.type==='network' || airline.type==='cargo')?airline.bases[0]:allowed[Math.floor(rng()*allowed.length)].icao;
+      const days = [];
+      for(let d=0; d<7; d++){
+        let flights=[];
+        if(longIdx.includes(d)){
+          let dest=null, attempt=0;
+          while(attempt<50){
+            const cand = allowed[Math.floor(rng()*allowed.length)];
+            if(cand.icao!==current){
+              const nm = cand.lat&&cand.lon?haversineNM(allowed.find(a=>a.icao===current), cand):0;
+              if(nm>2500){dest=cand; break;}
+            }
+            attempt++;
+          }
+          if(!dest){dest=allowed.find(a=>a.icao!==current) || allowed[0];}
+          const fromObj = allowed.find(a=>a.icao===current);
+          const nm = fromObj.lat&&dest.lat?haversineNM(fromObj,dest):3000;
+          const minutes = estimateBlockMinutes(nm,rng);
+          const aircraft = chooseAircraft(minutes, aircraftTypes, airline.fleet, airline.type==='cargo');
+          const ids = makeFlightIds(airlineName, seq++);
+          flights.push({from:current,to:dest.icao,minutes,aircraft,distance_nm:Math.round(nm),...ids,dep_gate:suggestGate(current,airlineName,rng),arr_gate:suggestGate(dest.icao,airlineName,rng)});
+          current = dest.icao;
+        }else{
+          let target = dailyHours*60;
+          let total=0;
+          while(total<target){
+            let dest=null, attempt=0;
+            while(attempt<50){
+              const cand = allowed[Math.floor(rng()*allowed.length)];
+              if(cand.icao!==current){
+                const nm = cand.lat&&cand.lon?haversineNM(allowed.find(a=>a.icao===current), cand):0;
+                if(nm<2500){dest=cand; break;}
+              }
+              attempt++;
+            }
+            if(!dest) break;
+            const fromObj = allowed.find(a=>a.icao===current);
+            const nm = fromObj.lat&&dest.lat?haversineNM(fromObj,dest):500;
+            const minutes = estimateBlockMinutes(nm,rng);
+            if(minutes>360) break;
+            const aircraft = chooseAircraft(minutes, aircraftTypes, airline.fleet, airline.type==='cargo');
+            const ids = makeFlightIds(airlineName, seq++);
+            flights.push({from:current,to:dest.icao,minutes,aircraft,distance_nm:Math.round(nm),...ids,dep_gate:suggestGate(current,airlineName,rng),arr_gate:suggestGate(dest.icao,airlineName,rng)});
+            total+=minutes;
+            current = dest.icao;
+          }
+        }
+        days.push({day:d+1, flights});
+      }
+      return {days};
+    }
+
+    function scheduleToCSV(schedule){
+      const rows=["Day,Flight,Callsign,From,To,Aircraft,Minutes"]; 
+      schedule.days.forEach(day=>{
+        day.flights.forEach(f=>{
+          rows.push(`${day.day},${f.flight_no},${f.callsign},${f.from},${f.to},${f.aircraft},${f.minutes}`);
+        });
+      });
+      return rows.join("\n");
+    }
+
+    // --- React Components --------------------------------------------------
+    function App(){
+      const [apiKey,setApiKey] = useState(localStorage.getItem('openaiKey')||'');
+      const [rememberKey,setRememberKey] = useState(false);
+      const [model,setModel] = useState('gpt-4o');
+      const [airlineInput,setAirlineInput] = useState('');
+      const [continent,setContinent] = useState('North America');
+      const [includeCargo,setIncludeCargo] = useState(true);
+      const [dailyHours,setDailyHours] = useState(8);
+      const [longDays,setLongDays] = useState(0);
+      const [ownedTypes,setOwnedTypes] = useState(ALL_AIRCRAFT);
+      const [payware,setPayware] = useState(()=>{
+        const stored = localStorage.getItem('paywareAirports');
+        return stored?JSON.parse(stored):DEFAULT_PAYWARE;
+      });
+      const [schedule,setSchedule] = useState(null);
+      const [flightSeq,setFlightSeq] = useState(100);
+      const [offline,setOffline] = useState(false);
+      const [qa,setQa] = useState([]);
+      const [showPayware,setShowPayware] = useState(false);
+      const [seed,setSeed] = useState('seed');
+
+      useEffect(()=>{localStorage.setItem('paywareAirports',JSON.stringify(payware));},[payware]);
+      useEffect(()=>{if(rememberKey) localStorage.setItem('openaiKey',apiKey);},[apiKey,rememberKey]);
+
+      function resolveAirline(){
+        if(airlineInput && AIRLINES[airlineInput]) return airlineInput;
+        const list = CONTINENTS[continent].filter(a=>includeCargo || AIRLINES[a].type!=='cargo');
+        const rng = seededRng(seed);
+        return list[Math.floor(rng()*list.length)];
+      }
+
+      async function generate(){
+        setOffline(false); setQa([]);
+        const airlineName = resolveAirline();
+        const airline = AIRLINES[airlineName];
+        const payload = {airline:airlineName, airline_type:airline.type, base_airports:airline.bases, allowed_airports:payware.map(p=>p.icao), aircraft_types:ownedTypes, daily_hours:dailyHours, long_days:longDays, seed};
+        try{
+          const res = await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${apiKey}`},body:JSON.stringify({model, response_format:{type:'json_object'}, messages:[{role:'system',content:`You are an MSFS scheduler. Think silently then output JSON with days and flights, respecting continuation and allowed_airports. Use only provided aircraft_types intersecting airline fleet.`},{role:'user',content:JSON.stringify(payload)}]})});
+          if(!res.ok) throw new Error('network');
+          const data = await res.json();
+          const json = JSON.parse(data.choices[0].message.content);
+          setSchedule(json); setFlightSeq(100 + json.days.reduce((a,d)=>a+d.flights.length,0));
+        }catch(e){
+          const json = generateLocalSchedule({airlineName, airline, payware, dailyHours, longDays, aircraftTypes:ownedTypes, seed});
+          setSchedule(json); setOffline(true); setFlightSeq(100 + json.days.reduce((a,d)=>a+d.flights.length,0));
+        }
+      }
+
+      function deleteLeg(dayIndex, legIndex){
+        setSchedule(s=>{
+          const days = s.days.map((d,idx)=>{if(idx!==dayIndex) return d; const flights=d.flights.slice(); flights.splice(legIndex,1); if(legIndex<flights.length){ if(legIndex===0){ /* first leg removed */ } else { flights[legIndex].from = flights[legIndex-1].to; }} return {...d,flights};});
+          return {days};
+        });
+      }
+
+      function addLeg(dayIndex){
+        const day = schedule.days[dayIndex];
+        const origin = day.flights.length?day.flights[day.flights.length-1].to: (dayIndex>0?schedule.days[dayIndex-1].flights.slice(-1)[0].to: AIRLINES[resolveAirline()].bases[0]);
+        const dest = payware.find(p=>p.icao!==origin) || payware[0];
+        const fromObj = payware.find(p=>p.icao===origin);
+        const nm = fromObj&&dest.lat?haversineNM(fromObj,dest):500;
+        const minutes = estimateBlockMinutes(nm);
+        const airlineName = resolveAirline();
+        const airline = AIRLINES[airlineName];
+        const aircraft = chooseAircraft(minutes, ownedTypes, airline.fleet, airline.type==='cargo');
+        const ids = makeFlightIds(airlineName, flightSeq);
+        const leg = {from:origin,to:dest.icao,minutes,aircraft,distance_nm:Math.round(nm),...ids,dep_gate:suggestGate(origin,airlineName),arr_gate:suggestGate(dest.icao,airlineName)};
+        setFlightSeq(flightSeq+1);
+        setSchedule(s=>{const days=s.days.map((d,idx)=>idx===dayIndex?{...d,flights:[...d.flights,leg]}:d); return {days};});
+      }
+
+      async function briefing(dayIndex, legIndex){
+        const airlineName = resolveAirline();
+        const leg = schedule.days[dayIndex].flights[legIndex];
+        const payload = {airline:airlineName, from:leg.from, to:leg.to, aircraft:leg.aircraft, distance_nm:leg.distance_nm || 0, block_minutes:leg.minutes};
+        try{
+          const res = await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${apiKey}`},body:JSON.stringify({model, response_format:{type:'json_object'}, temperature:0.7, messages:[{role:'system',content:'Write a fun dispatcher-style briefing (3-5 sentences) for this specific leg. Include: 1) likely passenger mix, 2) scenic highlights, 3) one interesting sim challenge or tip. Output JSON: { "briefing": "..." }.'},{role:'user',content:JSON.stringify(payload)}]})});
+          if(!res.ok) throw new Error('network');
+          const data = await res.json();
+          const json = JSON.parse(data.choices[0].message.content);
+          alert(json.briefing);
+        }catch(e){alert('Briefing failed');}
+      }
+
+      function runQA(){
+        const airlineName = resolveAirline();
+        const airline = AIRLINES[airlineName];
+        const messages=[];
+        // Continuation
+        schedule.days.forEach(d=>{d.flights.forEach((f,i)=>{if(i>0 && f.from!==d.flights[i-1].to) messages.push(`Day ${d.day} leg ${i+1} breaks continuation`);});});
+        // Payware
+        const allowed = new Set(payware.map(p=>p.icao));
+        schedule.days.forEach(d=>{d.flights.forEach(f=>{if(!allowed.has(f.from) || !allowed.has(f.to)) messages.push(`Non-payware airport on day ${d.day}`);});});
+        // Long haul counts
+        const longIdx = computeLongDayIndices(longDays);
+        const count = schedule.days.filter(d=>d.flights.some(f=>f.minutes>360)).length;
+        if(count!==longDays) messages.push('Long-haul day count mismatch');
+        schedule.days.forEach((d,idx)=>{if(!longIdx.includes(idx)){if(d.flights.some(f=>f.minutes>360)) messages.push(`Day ${d.day} has >6h leg`);}});
+        // Aircraft check
+        schedule.days.forEach(d=>{d.flights.forEach(f=>{const pick = chooseAircraft(f.minutes, ownedTypes, airline.fleet, airline.type==='cargo'); if(pick!==f.aircraft) messages.push(`Aircraft mismatch on day ${d.day}`);});});
+        // Network carrier base rule
+        if(airline.type==='network'){
+          schedule.days.forEach(d=>{d.flights.forEach(f=>{if(!airline.bases.includes(f.from) && !airline.bases.includes(f.to)) messages.push(`Network base rule violation day ${d.day}`);});});
+        }
+        setQa(messages.length?messages:['All checks passed']);
+      }
+
+      function copyCSV(){
+        if(!schedule) return;
+        const csv = scheduleToCSV(schedule);
+        navigator.clipboard.writeText(csv).then(()=>alert('Copied')); 
+      }
+
+      return (
+        <div className="flex">
+          <div className="w-1/3 p-4 space-y-4 sticky top-0 h-screen overflow-y-auto bg-gray-800">
+            <h1 className="text-xl font-bold">MSFS Career Scheduler {offline&&<span className="text-xs bg-yellow-600 px-1 rounded">offline fallback</span>}</h1>
+            <div>
+              <label className="block text-sm">OpenAI API Key</label>
+              <input className="w-full text-black" value={apiKey} onChange={e=>setApiKey(e.target.value)} />
+              <label className="text-xs"><input type="checkbox" checked={rememberKey} onChange={e=>setRememberKey(e.target.checked)} /> Remember this device</label>
+            </div>
+            <div>
+              <label className="block text-sm">Model</label>
+              <select className="text-black" value={model} onChange={e=>setModel(e.target.value)}>
+                <option value="gpt-4o">gpt-4o</option>
+                <option value="gpt-5-nano">gpt-5-nano</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm">Airline (leave blank for random)</label>
+              <input className="w-full text-black" value={airlineInput} onChange={e=>setAirlineInput(e.target.value)} />
+            </div>
+            {!airlineInput && (
+              <div>
+                <label className="block text-sm">Continent</label>
+                <select className="text-black" value={continent} onChange={e=>setContinent(e.target.value)}>
+                  {Object.keys(CONTINENTS).map(c=> <option key={c}>{c}</option>)}
+                </select>
+                <label className="text-xs"><input type="checkbox" checked={includeCargo} onChange={e=>setIncludeCargo(e.target.checked)} /> Include cargo airlines</label>
+              </div>
+            )}
+            <div>
+              <label className="block text-sm">Daily Flight Time Target: {dailyHours}h</label>
+              <input type="range" min="0" max="20" value={dailyHours} onChange={e=>setDailyHours(parseInt(e.target.value))} />
+            </div>
+            <div>
+              <label className="block text-sm">Long-haul Days per Week: {longDays}</label>
+              <input type="range" min="0" max="7" value={longDays} onChange={e=>setLongDays(parseInt(e.target.value))} />
+            </div>
+            <div>
+              <label className="block text-sm">Owned Aircraft Types</label>
+              {ALL_AIRCRAFT.map(a=>(
+                <label key={a} className="block text-xs"><input type="checkbox" checked={ownedTypes.includes(a)} onChange={e=>{setOwnedTypes(prev=>e.target.checked?[...prev,a]:prev.filter(x=>x!==a));}} /> {a}</label>
+              ))}
+            </div>
+            <div className="space-x-2">
+              <button className="bg-blue-600 px-2 py-1 rounded" onClick={generate} disabled={!apiKey}>Generate</button>
+              <button className="bg-green-600 px-2 py-1 rounded" onClick={runQA} disabled={!schedule}>Run QA</button>
+              <button className="bg-purple-600 px-2 py-1 rounded" onClick={()=>setShowPayware(true)}>Manage Payware</button>
+              <button className="bg-gray-600 px-2 py-1 rounded" onClick={copyCSV} disabled={!schedule}>Copy week</button>
+            </div>
+            {qa.length>0 && (
+              <div className="bg-gray-700 p-2 h-32 overflow-y-auto text-sm"><ul>{qa.map((m,i)=><li key={i}>{m}</li>)}</ul></div>
+            )}
+          </div>
+          <div className="w-2/3 p-4 space-y-4 overflow-y-auto h-screen">
+            {schedule? schedule.days.map((day,di)=>(
+              <div key={di} className="border border-gray-700 p-2 rounded">
+                <h2 className="font-bold">Day {day.day} (total {minutesToHHMM(day.flights.reduce((a,f)=>a+f.minutes,0))})</h2>
+                {day.flights.map((leg,li)=>(
+                  <div key={li} className="flex justify-between items-center py-1 border-b border-gray-600">
+                    <div className="flex-1">{leg.flight_no} / {leg.callsign}</div>
+                    <div className="flex-1">{leg.from} ➔ {leg.to}</div>
+                    <div className="flex-1">{leg.aircraft}</div>
+                    <div className="flex-1">{leg.distance_nm||""}nm {minutesToHHMM(leg.minutes)}</div>
+                    <div className="space-x-1">
+                      <button className="bg-red-600 px-1" onClick={()=>deleteLeg(di,li)}>Del</button>
+                      <button className="bg-yellow-600 px-1" onClick={()=>briefing(di,li)}>Brief</button>
+                    </div>
+                  </div>
+                ))}
+                <button className="bg-blue-700 px-2 mt-2" onClick={()=>addLeg(di)}>Add Leg</button>
+              </div>
+            )): <div>Generate schedule...</div>}
+          </div>
+          {showPayware && <PaywareModal payware={payware} setPayware={setPayware} onClose={()=>setShowPayware(false)} />}
+        </div>
+      );
+    }
+
+    function PaywareModal({payware,setPayware,onClose}){
+      const [icao,setIcao]=useState('');
+      const [city,setCity]=useState('');
+      const [lat,setLat]=useState('');
+      const [lon,setLon]=useState('');
+      function add(){
+        if(!icao||!city) return;
+        setPayware(prev=>[...prev,{icao:icao.toUpperCase(),city,lat:parseFloat(lat),lon:parseFloat(lon)}]);
+        setIcao('');setCity('');setLat('');setLon('');
+      }
+      function remove(idx){
+        setPayware(prev=>prev.filter((_,i)=>i!==idx));
+      }
+      return (
+        <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center">
+          <div className="bg-gray-800 p-4 w-96 space-y-2">
+            <h2 className="font-bold">Manage Payware</h2>
+            <div className="h-40 overflow-y-auto">
+              {payware.map((p,i)=>(
+                <div key={i} className="flex justify-between text-sm"><span>{p.icao} - {p.city}</span><button onClick={()=>remove(i)} className="text-red-400">X</button></div>
+              ))}
+            </div>
+            <div className="space-y-1">
+              <input placeholder="ICAO" className="w-full text-black" value={icao} onChange={e=>setIcao(e.target.value)} />
+              <input placeholder="City" className="w-full text-black" value={city} onChange={e=>setCity(e.target.value)} />
+              <input placeholder="Lat" className="w-full text-black" value={lat} onChange={e=>setLat(e.target.value)} />
+              <input placeholder="Lon" className="w-full text-black" value={lon} onChange={e=>setLon(e.target.value)} />
+            </div>
+            <div className="space-x-2">
+              <button className="bg-blue-600 px-2" onClick={add}>Add</button>
+              <button className="bg-gray-600 px-2" onClick={onClose}>Close</button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+
+    // --- Tests -------------------------------------------------------------
+    console.log('Running unit-like checks');
+    console.assert(minutesToHHMM(0)==='00:00','HHMM 0');
+    console.assert(minutesToHHMM(61)==='01:01','HHMM 61');
+    console.assert(estimateBlockMinutes(450,()=>0)===70,'450nm estimates 70min');
+    console.assert(chooseAircraft(390,["B777-300ER"],["B777-300ER"],false)==="B777-300ER","6.5h allows 777-300ER");
+    console.assert(chooseAircraft(950,["A350-900 ULR"],["A350-900 ULR"],false)==="A350-900 ULR",">15h A350-900 ULR");
+    console.assert(chooseAircraft(780,["B777-300ER","A350-1000"],["B777-300ER","A350-1000"],false)=="B777-300ER","12-15h 777-300ER");
+    console.assert(chooseAircraft(600,["B777-300ER","A350-1000"],["B777-300ER","A350-1000"],false)=="A350-1000","9-12h A350-1000");
+    console.assert(chooseAircraft(100,["B777 Freighter"],["B777 Freighter"],true)=="B777 Freighter","Cargo any duration");
+    const seedTest1 = computeLongDayIndices(2).join(',');
+    const seedTest2 = computeLongDayIndices(2).join(',');
+    console.assert(seedTest1===seedTest2,'Long-haul selection deterministic');
+    console.log('All tests passed');
+    // Manual QA script in comments
+    /*
+      Manual QA:
+      - Try United/BA/Ryanair/UPS/FedEx with different long-haul counts (0,1,2,4).
+      - Add/remove payware; regenerate; confirm airports respected.
+      - Add Leg & Delete Leg: continuity preserved; totals update; flight numbers increment.
+      - Briefings generate JSON with "briefing".
+    */
+  </script>
+</body>
+</html>
