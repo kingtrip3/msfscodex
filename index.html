@@ -169,13 +169,14 @@
       const {airlineName, airline, payware, dailyHours, longDays, aircraftTypes, seed} = params;
       const rng = seededRng(seed);
       const allowed = payware;
-      const longIdx = computeLongDayIndices(longDays);
+      const longIdx = airline.type==='cargo'?[]:computeLongDayIndices(longDays);
       let seq = 100;
       let current = (airline.type==='network' || airline.type==='cargo')?airline.bases[0]:allowed[Math.floor(rng()*allowed.length)].icao;
       const days = [];
       for(let d=0; d<7; d++){
         let flights=[];
-        if(longIdx.includes(d)){
+        const isLongDay = longIdx.includes(d) && airline.type!=='cargo';
+        if(isLongDay){
           let dest=null, attempt=0;
           while(attempt<50){
             const cand = allowed[Math.floor(rng()*allowed.length)];
@@ -202,7 +203,7 @@
               const cand = allowed[Math.floor(rng()*allowed.length)];
               if(cand.icao!==current){
                 const nm = cand.lat&&cand.lon?haversineNM(allowed.find(a=>a.icao===current), cand):0;
-                if(nm<2500){dest=cand; break;}
+                if(airline.type==='cargo' || nm<2500){dest=cand; break;}
               }
               attempt++;
             }
@@ -210,7 +211,7 @@
             const fromObj = allowed.find(a=>a.icao===current);
             const nm = fromObj.lat&&dest.lat?haversineNM(fromObj,dest):500;
             const minutes = estimateBlockMinutes(nm,rng);
-            if(minutes>360) break;
+            if(airline.type!=='cargo' && minutes>360) break;
             const aircraft = chooseAircraft(minutes, aircraftTypes, airline.fleet, airline.type==='cargo');
             const ids = makeFlightIds(airlineName, seq++);
             flights.push({from:current,to:dest.icao,minutes,aircraft,distance_nm:Math.round(nm),...ids,dep_gate:suggestGate(current,airlineName,rng),arr_gate:suggestGate(dest.icao,airlineName,rng)});
@@ -474,9 +475,17 @@
     console.assert(chooseAircraft(780,["B777-300ER","A350-1000"],["B777-300ER","A350-1000"],false)=="B777-300ER","12-15h 777-300ER");
     console.assert(chooseAircraft(600,["B777-300ER","A350-1000"],["B777-300ER","A350-1000"],false)=="A350-1000","9-12h A350-1000");
     console.assert(chooseAircraft(100,["B777 Freighter"],["B777 Freighter"],true)=="B777 Freighter","Cargo any duration");
-    const seedTest1 = computeLongDayIndices(2).join(',');
-    const seedTest2 = computeLongDayIndices(2).join(',');
-    console.assert(seedTest1===seedTest2,'Long-haul selection deterministic');
+    for(let i=0;i<=7;i++){
+      console.assert(computeLongDayIndices(i).length===i,`Long-haul ${i} count`);
+    }
+    const cargoParams={airlineName:'UPS',airline:AIRLINES['UPS'],payware:[{icao:'KSDF',lat:38.1744,lon:-85.7360},{icao:'OMDB',lat:25.2528,lon:55.3644}],dailyHours:5,longDays:0,aircraftTypes:['B777 Freighter'],seed:'cargo'};
+    const cargoSched=generateLocalSchedule(cargoParams);
+    const cargoLong=cargoSched.days.some(day=>day.flights.some(f=>f.minutes>360));
+    console.assert(cargoLong,'Cargo schedule allows long legs without longDays');
+    const seedParams={airlineName:'Air Canada',airline:AIRLINES['Air Canada'],payware:DEFAULT_PAYWARE,dailyHours:5,longDays:2,aircraftTypes:['A319','A320','B777-300ER'],seed:'seed'};
+    const sched1=generateLocalSchedule(seedParams);
+    const sched2=generateLocalSchedule(seedParams);
+    console.assert(JSON.stringify(sched1)===JSON.stringify(sched2),'Local generator deterministic with same seed');
     console.log('All tests passed');
     // Manual QA script in comments
     /*
