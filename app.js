@@ -11,7 +11,7 @@ function Airline() {
 }
 
 const dbName = 'msfs-career';
-const dbVersion = 1;
+const dbVersion = 2;
 const paywareStoreName = 'payware-airports';
 const fleetStoreName = 'fleet';
 
