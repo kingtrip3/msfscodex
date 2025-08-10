@@ -195,12 +195,6 @@ function Schedule() {
 function App() {
   const [route, setRoute] = useState('dashboard');
 
-  useEffect(() => {
-    if (!window.idb) {
-      alert("Error: The database library (idb) failed to load. The application will not be able to save data.");
-    }
-  }, []);
-
   const navigateTo = (page) => {
     setRoute(page);
   };
