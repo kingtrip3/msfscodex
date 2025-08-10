@@ -129,6 +129,8 @@ function Fleet() {
       await db.put(fleetStoreName, formState);
       setFleet([...fleet, formState]);
       setFormState({ reg: '', type: '', homeBase: '', status: 'active' }); // Reset form
+    } else {
+      alert('Please fill out all required fields: Registration, Type, and Home Base.');
     }
   };
 
@@ -192,6 +194,12 @@ function Schedule() {
 
 function App() {
   const [route, setRoute] = useState('dashboard');
+
+  useEffect(() => {
+    if (!window.idb) {
+      alert("Error: The database library (idb) failed to load. The application will not be able to save data.");
+    }
+  }, []);
 
   const navigateTo = (page) => {
     setRoute(page);
